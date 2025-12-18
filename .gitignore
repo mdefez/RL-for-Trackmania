@@ -1,2 +1,6 @@
 /setup/myenv
+*.env
 /setup/keyboard/__pycache__
+*/__pycache__
+**/bin
+**/obj

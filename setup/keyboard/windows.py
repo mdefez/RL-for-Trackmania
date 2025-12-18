@@ -2,11 +2,6 @@ import ctypes
 
 SendInput = ctypes.windll.user32.SendInput
 
-W  = 0x11  ## (accelerate)
-S  = 0x1F  ## (brake)
-A  = 0x1E  ## (steer left)
-D  = 0x20  ## (steer right)
-
 PUL = ctypes.POINTER(ctypes.c_ulong)
 class KeyBdInput(ctypes.Structure):
     _fields_ = [("wVk", ctypes.c_ushort),
