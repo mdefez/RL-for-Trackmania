@@ -1,144 +1,211 @@
 keys = ["W", "A", "S", "D"]
-possible_actions = {(1, 1) : "WD", (1, -1) : "WA", (1, 0) : "W", (0, -1) : "A", (0, 1) : "D"}
+ACTIONS = [
+    (1, 0),   # W
+    (1, 1),   # WD
+    (1, -1),  # WA
+    (0, 1),   # D
+    (0, -1),  # A
+]
+n_actions = len(ACTIONS)
+
+link_action_key = {(1, 0) : "W", (1, 1) : "WD", (1, -1) : "WA", (0, 1) : "D", (0, -1) : "A"}
+
+
+FEATURES = [
+    "speed",
+    "finished",
+    "distance_next_turn",
+    "pos_x",
+    "pos_z",
+    "distance_finish_line",
+    "angle_car_direction",
+    "direction_x",
+    "direction_z",
+    "distance_center_line"
+]
+
+features_nn = ["angle_car_direction", "speed", "distance_closest_wall", "distance_next_turn"]
+ref = [0.3, 20, 3, 100]        # to normalize around 1
+
+
+
+
 
 import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import wandb
+from collections import deque
 
 
-
-def compute_discounted_reward(
-    rewards,
-    gamma=0.99
-):
-    """
-    rewards : liste de rewards successives [r_t, r_{t+1}, ..., r_{t+k}]
-    gamma  : facteur de décroissance (0 < gamma <= 1)
-
-    retourne : reward scalaire
-    """
-
-    total_reward = 0.0
-    power = 0
-
-    for reward in rewards:
-        total_reward += (gamma ** power) * reward
-        power += 1
-
-    return total_reward
+wandb.init(project="RL-TM")
 
 from setup.trackmania.env import TMEnv
 
 class NaiveModel :
-    def __init__(self, env : TMEnv):
+    def __init__(self, env : TMEnv, weights_path = False):
         self.env = env
         self.history = [] 
-        self.k = 10  # Calcul de la reward sur les k prochains états
         self.gamma = 0.99
 
         self.history_action = []    # Garde en mémoire les actions effectuées
         self.history_reward = []
 
-        # Init network
-        self.neural_network = RewardNetwork(state_dim=len(self.env.observation_space), action_dim=self.env.action_space.shape[0], hidden_dim=128)
+        self.replay_buffer = deque(maxlen=30000)  # Taille max du buffer en nombre de steps
+        self.batch_size = 32
+        self.warmup_steps = 2000
+
+        self.count_log_loss = 0
+        self.log_every = 10
+ 
+        self.epsilon_min = 0.05
+        self.epsilon = 1
+
+        self.epsilon_decay = 0.99995        
+
+        self.save_weights_every = 1e3
+        self.count_save_weights = 0
+
+        self.q_network = QNetwork(len(self.env.observation_space), n_actions)
+        if type(weights_path) == str:
+            print("model loaded")
+            self.q_network.load_state_dict(torch.load(weights_path))
+
+        self.target_network = QNetwork(len(self.env.observation_space), n_actions)
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        self.target_network.eval()
+
+
 
     def learn(self, total_timesteps):
-        first_obs = self.env.reset()
+        first_obs, _ = self.env.reset()
         self.history.append(first_obs)
+        self.history_reward.append(0)
+
+        terminated = False
         for t in range(total_timesteps):
+            self.epsilon = max(self.epsilon_min, self.epsilon*self.epsilon_decay)
+
+            # self.epsilon = self.epsilon_min   # For testing
+
             ## Compute action
-            next_action = self.find_action()
+            if terminated:
+                next_action = 0x0E
+                first_obs, _ = self.env.reset()
+                self.history = [] 
+                self.history_action = []
+                self.history_reward = []
+
+            else:
+                next_action = self.find_action()
 
             ## Apply action
             obs, reward, terminated, truncated, info = self.env.step(next_action)
 
             self.history_reward.append(reward)
             self.history.append(obs)
-            self.update_weights()
-    
+
+            # Si on a fait une première action, on ajoute la transition d'état dans le buffer
+            if len(self.history) >= 2:
+                state_t, action_t, reward, state_tp1 = self.history[-2], self.history_action[-1], self.history_reward[-1], self.history[-1]
+                self.replay_buffer.append((state_t, action_t, reward, state_tp1, terminated))
+
+            # Si le buffer est suffisament grand, on train
+            if len(self.replay_buffer) >= self.warmup_steps:
+                self.train_from_buffer()
+
+                # Save the model's weights from time to time
+                self.count_save_weights += 1
+                if self.count_save_weights == self.save_weights_every:
+                    print("model saved")
+                    torch.save(self.q_network.state_dict(), "../Learning/models/with_time.pth")
+                    self.count_save_weights = 0
+
+
+
+            # De temps en temps on update le target model
+            if t % 1000 == 0:
+                print("target model updated")
+                self.target_network.load_state_dict(self.q_network.state_dict())
+
+    # Convertit l'observation (dictionnaire) en tenseur de float
+    def obs_to_tensor(self, obs):
+        state = torch.tensor(
+            [obs[features_nn[k]]/ref[k] for k in range(len(features_nn))],
+            dtype=torch.float32
+        )
+
+        return state
+
     def find_action(self):
-        max_expected_reward = -float("inf")
-        current_data = list(self.history[-1].values())
+        state = self.obs_to_tensor(self.history[-1]).unsqueeze(0)
 
-        for action in possible_actions.keys():
-            expected_reward = self.neural_network.forward(torch.tensor(current_data, dtype = torch.float32), torch.tensor(action, dtype = torch.float32))
-            if expected_reward > max_expected_reward:
-                best_action = action 
-
-        # epsilon greedy pour explorer un peu
-        A = random.random()
-        eps = 0.2
-        if A < 1-eps:
-            choosen_action = best_action
-        
+        if random.random() < self.epsilon:
+            action_idx = random.randrange(n_actions)
         else:
-            choosen_action=  random.choice(list(possible_actions.keys()))
+            with torch.no_grad():
+                q_values = self.q_network(state)
+                action_idx = torch.argmax(q_values).item()
 
-        self.history_action.append(choosen_action)
-        return possible_actions[choosen_action]
+        self.history_action.append(action_idx)
+
+        return link_action_key[ACTIONS[action_idx]]     # output as str, we seek keys
     
-    def update_weights(self):
-        """
-        Fonction qui appelle la fonction de mise à jour des poids. Elle est effectué à chaque étape uniquement après l'étape k (pour pouvoir calculer les vraies loss)
-        """
 
-        # Dès qu'on a k états futurs, on entraîne
-        if len(self.history) > self.k:
-            
-            idx = -self.k
+    def train_from_buffer(self):
+        batch = random.sample(self.replay_buffer, self.batch_size)
 
-            future_states = [h for h in self.history[idx:idx+self.k - 1]]
-            future_states.append(self.history[-1])
+        states, actions, rewards, next_states, terminateds = zip(*batch)
 
-            true_reward = compute_discounted_reward(future_states, self.gamma)
-            true_reward = torch.tensor(true_reward, dtype=torch.float32).unsqueeze(0)
+        states = torch.stack([self.obs_to_tensor(s) for s in states])
+        actions = torch.tensor(actions, dtype=torch.long)
+        rewards = torch.tensor(rewards, dtype=torch.float32)
+        next_states = torch.stack([self.obs_to_tensor(s) for s in next_states])
+        terminateds = torch.tensor(terminateds, dtype=torch.float32)
 
-            state_t = torch.tensor(list(self.history[idx].values()), dtype = torch.float32)
-            action_t = torch.tensor(self.history_action[idx], dtype = torch.float32)
+        # Q(s,a)
+        q_values = self.q_network(states)
+        q_sa = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
-            self.neural_network.update_weights(
-                state_t, action_t,
-                true_reward
-            )
+        # Target
+        with torch.no_grad():
+            next_q = self.target_network(next_states).max(dim=1)[0]
+            y = rewards + self.gamma * next_q * (1 - terminateds)   # On ajoute rien si c'est terminé
+
+        loss = F.mse_loss(q_sa, y)
+
+        self.q_network.optimizer.zero_grad()
+        loss.backward()
+        self.q_network.optimizer.step()
 
 
-# Prend en entrée les données et une action à évaluer. Renvoie une estimation de la reward si on choisit cette action
-class RewardNetwork(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim=128):
+
+
+
+# Prend en entrée les données et renvoie une estimation de la q value pour toutes les actions possibles, c'est donc un tuple
+class QNetwork(nn.Module):
+    def __init__(self, state_dim, n_actions, hidden_dim=128):
         super().__init__()
 
-        self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.fc1 = nn.Linear(state_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.out = nn.Linear(hidden_dim, 1)
+        self.out = nn.Linear(hidden_dim, n_actions)
         self.lr = 1e-4
+
+        self.log_every = 10
+        self.count_log_loss = 0
 
         self.optimizer = optim.Adam(self.parameters(), lr=self.lr)
 
-    def forward(self, state, action):
+    def forward(self, state):
         """
         state  : tensor (state_dim)
-        action : tensor (action_dim)
         """
         
-        x = torch.cat([state, action], dim=-1)
-        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
 
         return self.out(x)
     
-    def update_weights(self, state, action, R_true):
-        """
-        state, action : tenseur de l'instant t. On les utilise pour calculer la prédiciton de la discounted reward (faite à l'instant t)
-        R_true : tenseur scalaire (reward vraie calculée à t+k)
-        """
-        R_pred = self.forward(state, action)
-
-        loss = nn.MSELoss()(R_pred, R_true)
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        # loss.item()

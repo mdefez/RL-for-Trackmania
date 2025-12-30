@@ -1,6 +1,7 @@
 /setup/myenv
 *.env
 /setup/keyboard/__pycache__
+/setup/wandb
 __pycache__
 bin
 obj

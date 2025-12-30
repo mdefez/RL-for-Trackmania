@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 
 import asyncio
 import threading
+import time
 
 import platform
 if platform.system() == "Darwin":
@@ -33,8 +34,12 @@ class TMController:
 
             if not data :
                 return jsonify({"error": "No JSON payload provided"}), 400
+
+            def _set() :
+                if not self._data_future.done() :
+                    self._data_future.set_result(data)
             
-            self._loop.call_soon_threadsafe(self._data_future.set_result, data)
+            self._loop.call_soon_threadsafe(_set)
 
             return jsonify({"status": "success", "received": data}), 200
     
@@ -52,6 +57,12 @@ class TMController:
         return data
 
     def action(self, keys : list[str]):
+        if keys == 0x0E:
+            PressKey(keys)
+            time.sleep(1.5)
+            ReleaseKey(keys)
+            return None
+
         ## Clear all pressed keys
         old_pressed_keys = self.new_press_keys.copy()
         self.new_press_keys.clear()
