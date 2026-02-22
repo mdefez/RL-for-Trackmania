@@ -54,8 +54,9 @@ class NaiveEnv(TMEnv) :
         self.reward_finish = 50
         self.penalty_out_of_track = -50
         self.w_angle = 2        # Weights for the reward, concerning the angle
-        self.w_progress = 25    # Progress
+        self.w_progress = 35    # Progress
         self.w_walls = 5        # Distance to closest walls
+        self.w_time = 1         # Pénalité de temps pour forcer l'agent à finir rapidement
 
         self.init_features()
 
@@ -108,10 +109,6 @@ class NaiveEnv(TMEnv) :
         # On cape les valeurs si jamais il y a des outliers et on normalise pour que ce soit environ égal à 1
         self.progress_between_2_obs = np.clip(self.progress_between_2_obs, -20, 20) / 20
 
-        # On rajoute une pénalité flat pour prendre en compte le temps, et optimiser alors la vitesse
-        self.progress_between_2_obs -= 0.12
-
-
         # On détecte s'il y a crash
         self.previous_positions.append(self.current_position)
         if len(self.previous_positions) > self.treshold_stuck:
@@ -154,6 +151,7 @@ class NaiveEnv(TMEnv) :
             - self.importance_crash * self.crash +
             self.reward_finish * self.finish + 
             + self.penalty_out_of_track * self.out_of_track
+            - self.w_time
 
         )
 

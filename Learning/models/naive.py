@@ -24,10 +24,9 @@ FEATURES = [
     "distance_center_line"
 ]
 
+# Features we feed the NN 
 features_nn = ["angle_car_direction", "speed", "distance_closest_wall", "distance_next_turn"]
 ref = [0.3, 20, 3, 100]        # to normalize around 1
-
-
 
 
 
@@ -50,6 +49,9 @@ class NaiveModel :
         self.history = [] 
         self.gamma = 0.99
 
+        self.delta_t = env.delta_t      # Time between 2 commands
+        self.finish_time = 0            # Save the finish time
+
         self.history_action = []    # Garde en mémoire les actions effectuées
         self.history_reward = []
 
@@ -60,10 +62,10 @@ class NaiveModel :
         self.count_log_loss = 0
         self.log_every = 10
  
-        self.epsilon_min = 0.05
-        self.epsilon = 1
+        self.epsilon_min = 0.1
+        self.epsilon = 0.6
 
-        self.epsilon_decay = 0.99995        
+        self.epsilon_decay = 0.9995        
 
         self.save_weights_every = 1e3
         self.count_save_weights = 0
@@ -92,6 +94,11 @@ class NaiveModel :
 
             ## Compute action
             if terminated:
+                if reward < 0:
+                    self.finish_time = 60   # Default value if we terminate by hitting a wall
+                wandb.log({"Finish time": self.finish_time})
+                self.finish_time = 0
+
                 next_action = 0x0E
                 first_obs, _ = self.env.reset()
                 self.history = [] 
@@ -100,6 +107,7 @@ class NaiveModel :
 
             else:
                 next_action = self.find_action()
+                self.finish_time += self.delta_t
 
             ## Apply action
             obs, reward, terminated, truncated, info = self.env.step(next_action)
