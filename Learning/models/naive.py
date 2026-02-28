@@ -44,8 +44,9 @@ wandb.init(project="RL-TM")
 from setup.trackmania.env import TMEnv
 
 class NaiveModel :
-    def __init__(self, env : TMEnv, weights_path = False):
+    def __init__(self, env : TMEnv, weights_path = False, testing = False):
         self.env = env
+        self.testing = testing
         self.history = [] 
         self.gamma = 0.99
 
@@ -62,6 +63,7 @@ class NaiveModel :
         self.count_log_loss = 0
         self.log_every = 10
  
+        self.epsilon_testing = 0
         self.epsilon_min = 0.1
         self.epsilon = 0.6
 
@@ -88,9 +90,12 @@ class NaiveModel :
 
         terminated = False
         for t in range(total_timesteps):
-            self.epsilon = max(self.epsilon_min, self.epsilon*self.epsilon_decay)
 
-            # self.epsilon = self.epsilon_min   # For testing
+            if self.testing == False:
+                self.epsilon = max(self.epsilon_min, self.epsilon*self.epsilon_decay)
+
+            else:       # Testing
+                self.epsilon = self.epsilon_testing   
 
             ## Compute action
             if terminated:
@@ -128,7 +133,7 @@ class NaiveModel :
                 self.count_save_weights += 1
                 if self.count_save_weights == self.save_weights_every:
                     print("model saved")
-                    torch.save(self.q_network.state_dict(), "../Learning/models/with_time.pth")
+                    torch.save(self.q_network.state_dict(), "../Learning/models/without_angle.pth")
                     self.count_save_weights = 0
 
 

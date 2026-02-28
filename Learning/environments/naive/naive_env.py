@@ -53,7 +53,7 @@ class NaiveEnv(TMEnv) :
 
         self.reward_finish = 50
         self.penalty_out_of_track = -50
-        self.w_angle = 2        # Weights for the reward, concerning the angle
+        self.w_angle = 0        # Weights for the reward, concerning the angle. Should be 2
         self.w_progress = 35    # Progress
         self.w_walls = 5        # Distance to closest walls
         self.w_time = 1         # Pénalité de temps pour forcer l'agent à finir rapidement

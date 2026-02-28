@@ -25,5 +25,5 @@ from Learning.environments.naive.naive_env import NaiveEnv
 
 
 env = NaiveEnv(delta_t = 0.1)       # Temps en secondes
-model = NaiveModel(env, weights_path=False) # "../Learning/models/with_time.pth"  
+model = NaiveModel(env, weights_path="../Learning/models/without_walls.pth", testing = True) # "../Learning/models/with_time.pth"  
 model.learn(total_timesteps=int(1e5))
